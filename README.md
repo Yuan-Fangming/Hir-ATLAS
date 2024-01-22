@@ -1,5 +1,6 @@
-# Local positional graphs and attentive local features for a data and runtime-efficient hierarchical place recognition pipeline
+## Local positional graphs and attentive local features for a data and runtime-efficient hierarchical place recognition pipeline
 
+# Requirments 
 Requirment: scipy-1.10.1  h5py-3.10.0 hdf5storage-0.1.18  numpy-1.23.5 matplotlib-3.7.4
 
 ![aaa](/images/Zeichnung_v2.svg)
@@ -9,6 +10,7 @@ The paper can be found in ....$link$....
 The pipeline is a hybrid implementation of Python and C/C++, where Python is used as a glue language to integrate software packages for feature extraction, database preparation, and the LPG algorithm.  C/C++ is used to integrate Cublas running on GPU and CPU-based multi-thread to accelerate software packages such as feature mutual comparison, RANSAC, and LPG algorithm.
 
 
+# Acceleration package compiling
 First 
 >cd AccLib/
 
