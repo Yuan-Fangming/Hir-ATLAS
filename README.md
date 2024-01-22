@@ -24,4 +24,4 @@ Compiling the C++ acc library
 >g++ -L/usr/local/lib -shared -pthread -o "libvipracc"  vipracc.o   -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_features2d -lopencv_calib3d -lopencv_flann
 
 
-## The source code preparation from the experiment level to a compact software package is under construction.
+## The source code is still under preparation for a compact software package based on the experiment-level code.
