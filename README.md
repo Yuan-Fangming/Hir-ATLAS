@@ -25,7 +25,7 @@ Compiling `AccLibcu/VIPRMatAcc.cpp` for GPU accelerated feature comparison, wher
 
 `$NV-tool-chain-path$/nvcc --cudart=static -L/usr/local/cuda-12.1/targets/x86_64-linux/lib -ccbin g++ --shared -gencode arch=compute_52,code=sm_52 -gencode arch=compute_52,code=compute_52 -o "libcuVIPRACCLib"  ./cuVIPRMatAcc.o   -lcublas -lcublasLt`
 
-Compiling the C++ acc library for LPG, MM, and RANSAC algorithms
+Compiling `AccLib/vipracc.cpp` for multi-thread LPG, MM, and RANSAC algorithms
 
 `g++ -O3 -Ofast -g3 -Wall -c -fmessage-length=0 -fPIC -MMD -MP -MF"vipracc.d" -MT"vipracc.o" -o "vipracc.o" "vipracc.cpp"`
 
