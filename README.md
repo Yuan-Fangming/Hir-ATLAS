@@ -1,8 +1,10 @@
 ## Local positional graphs and attentive local features for a data and runtime-efficient hierarchical place recognition pipeline
 
-# Requirments 
+## Requirments 
+# Python:
 Requirment: scipy-1.10.1  h5py-3.10.0 hdf5storage-0.1.18  numpy-1.23.5 matplotlib-3.7.4 nvcc-12.1
-
+# Nvidia tool chain:
+nvcc-12.1
 ![aaa](/images/Zeichnung_v2.svg)
 This repository contains the source code for the accepted  IEEE Robotics and Automation Letters(RA-L) paper: Local positional graphs and attentive local features for a data and runtime-efficient hierarchical place recognition pipeline.
 The paper can be found in ....$link$....
