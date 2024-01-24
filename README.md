@@ -19,7 +19,7 @@ First cd to AccLib directory
 `cd AccLib/`
 
 
-Compiling the cuBLAS acc library for GPU based feature comparison, where `$NV-tool-chain-path$` is the path to the nvcc e.g /usr/local/cuda-12.1/bin
+Compiling `AccLibcu/VIPRMatAcc.cpp` for GPU accelerated feature comparison, where `$NV-tool-chain-path$` is the path to the nvcc e.g /usr/local/cuda-12.1/bin
 
 `$NV-tool-chain-path$/nvcc --device-debug --debug -gencode arch=compute_52,code=sm_52 -gencode arch=compute_52,code=compute_52 -Xcompiler -fPIC -ccbin g++ -c -o "cuVIPRMatAcc.o" "cuVIPRMatAcc.cpp"`
 
