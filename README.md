@@ -10,7 +10,7 @@ The pipeline is a hybrid implementation of Python and C/C++, where Python is use
 
 ## Requirments 
 ### Python:
-`scipy-1.10.1  h5py-3.10.0 hdf5storage-0.1.18  numpy-1.23.5 matplotlib-3.7.4 nvcc-12.1`
+`scipy-1.10.1  h5py-3.10.0 hdf5storage-0.1.18  numpy-1.23.5 matplotlib-3.7.4`
 ### Nvidia tool chain:
 `nvcc-12.1`
 
