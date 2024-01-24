@@ -1,3 +1,6 @@
+## $\color{purple}{source \space code \space is \space still \space under \space preparation \space for \space a \space compact \space implementation \space based \space on \space the \space experiment-level \space code.}$
+
+
 # Local positional graphs and attentive local features for a data and runtime-efficient hierarchical place recognition pipeline
 
 
@@ -32,4 +35,3 @@ Compiling `AccLib/vipracc.cpp` for multi-thread LPG, MM, and RANSAC algorithms
 `g++ -L/usr/local/lib -shared -pthread -o "libvipracc"  vipracc.o   -lopencv_core -lopencv_imgproc -lopencv_highgui -lopencv_features2d -lopencv_calib3d -lopencv_flann`
 
 
-# The source code is still under preparation for a compact software package based on the experiment-level code.
