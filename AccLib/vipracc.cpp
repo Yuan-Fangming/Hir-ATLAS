@@ -1,22 +1,20 @@
-/* 
+/*
  * This file is part of the Hir-ATLAS distribution (https://github.com/Yuan-Fangming/Hir-ATLAS).
  * Copyright (c) 2024 Fangming Yuan.
- * 
- * This program is free software: you can redistribute it and/or modify  
- * it under the terms of the GNU General Public License as published by  
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 2.
  *
- * This program is distributed in the hope that it will be useful, but 
- * WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License 
+ * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-
-//g++ -o FeatureMatchAcc.so  -lpthread -shared -fPIC FeatureMatchAcc.cpp
 #include <iostream>
 #include <string>
 #include <stdlib.h>
@@ -491,6 +489,200 @@ float C_PairwiseSimilarityPosGraph(const int a_num, const int b_num,
     return sim_sum/sqrt(float(a_num*b_num));
   }
 
+
+
+
+
+  if(alg_type == PAIRWISE_STARGRAPH) {
+	int gauss_center_y = gauss_y_size>>1;
+	int gauss_center_x = gauss_x_size>>1;
+
+    // get the number of matched local features
+    unsigned int match_idx_list[a_num];
+    // probe the number of matched keypoints
+    int match_count = ProbeMatchCount(matches, a_num, match_idx_list);
+    int a_x_mean=0;
+    int a_y_mean=0;
+    int b_x_mean=0;
+    int b_y_mean=0;
+    // calculate the mean pos of each matched local feature in a and b
+    for (int i=0; i<match_count; i++ ) {
+    	int a_pos_idx = match_idx_list[i]*2;
+    	int b_pos_idx = matches[match_idx_list[i]]*2;
+    	a_y_mean += a_pos[a_pos_idx];
+    	a_x_mean += a_pos[a_pos_idx+1];
+    	b_y_mean += b_pos[b_pos_idx];
+    	b_x_mean += b_pos[b_pos_idx+1];
+    }
+	a_y_mean /= match_count;
+	a_x_mean /= match_count;
+	b_y_mean /= match_count;
+	b_x_mean /= match_count;
+    // calculate the image score
+	float sim_sum = 0.0;
+	for (int i=0; i<match_count; i++ ) {
+    	int a_pos_idx = match_idx_list[i]*2;
+    	int b_pos_idx = matches[match_idx_list[i]]*2;
+    	//int a_idx = match_idx_list[i];
+    	//int b_idx = matches[match_idx_list[i]];
+    	int y_a = a_pos[a_pos_idx]-a_y_mean;
+    	int x_a = a_pos[a_pos_idx+1]-a_x_mean;
+    	int y_b = b_pos[b_pos_idx]-b_y_mean;
+    	int x_b = b_pos[b_pos_idx+1]-b_x_mean;
+    	int diff_x =  x_a-x_b;
+    	int diff_y =  y_a-y_b;
+        diff_y += gauss_center_y;
+        diff_x += gauss_center_x;
+
+    	int gauss_idx = diff_y*gauss_x_size+diff_x;
+    	float gauss_score = gaussian_patch[gauss_idx];
+    	sim_sum += distance[match_idx_list[i]]*gauss_score;
+	}
+    return sim_sum/sqrt(float(a_num*b_num));
+  }
+    /*
+	srand((unsigned)time(NULL));
+
+	  // find all matched keypoint
+	#define param_min_sampled_kp_count  10
+	int param_ransac_try_count = 50;
+	float threshold = 32*3;//5.0;
+
+	//int a_num = 100;
+	//int b_num = 100;
+	unsigned int matched_A_kp_idx[a_num];
+	int matched_count = ProbeMatchCount(matches, a_num, matched_A_kp_idx);
+	param_ransac_try_count = matched_count;
+	MatrixXf matched_A_homo(matched_count,3);
+	MatrixXf matched_B_homo(matched_count,3);
+	matched_count = FetchMatchedCorrespondence(a_pos, b_pos, matches, a_num, matched_A_homo, matched_B_homo);
+	// check if matched point is smaller than 16
+	if (matched_count<param_min_sampled_kp_count) {
+	  // if matched point smaller than the required number of matches return frame similarity 0.0
+	  return 0.0;
+	}
+	// random select 8 matched keypoints and calculate the fundamental matrix
+	MatrixXf fundamental_mat=MatrixXf::Ones(param_ransac_try_count, 9);
+	MatrixXf coeff_mat(param_min_sampled_kp_count, 8);
+	MatrixXf sampled_8point_A_homo(param_min_sampled_kp_count,3);
+	MatrixXf sampled_8point_B_homo(param_min_sampled_kp_count,3);
+	MatrixXf sampled_8point_A_homo_norm(param_min_sampled_kp_count,3);
+	MatrixXf sampled_8point_B_homo_norm(param_min_sampled_kp_count,3);
+	//point set normalization matrix
+	MatrixXf Ha=MatrixXf::Zero(3,3);
+	MatrixXf Hb=MatrixXf::Zero(3,3);
+
+	// some matrix and variable
+	MatrixXf equation_result_mat=MatrixXf::Constant(param_min_sampled_kp_count,1,-1.0);
+	int random_kp_idx[param_min_sampled_kp_count];
+
+	// variables for calculate the diszance to epline
+	MatrixXf s(3,3);
+	MatrixXf f_mat(3,3);
+	ArrayXXf epline_B(matched_count,3);
+	ArrayXXf distance_norm(matched_count,1);
+	ArrayXXf A2epline_distance(matched_count,3);
+	ArrayXXf b2epline_distance(matched_count,param_ransac_try_count);
+
+	for (int i=0; i<param_ransac_try_count; i++) {
+#ifdef VIPRACC_DEBUG
+	  cout<<"#######---------------------------------------------------------------------------------------########"<<endl;
+#endif
+      //generate random N(param_min_sampled_kp_count) number from 0 to total matched keypoints(matched_count)
+	  Random_0_N_Array(matched_count ,random_kp_idx, param_min_sampled_kp_count);
+	  //fill the sampled_8point_A/B_homo with the sampled point
+	  FillSampledKeypoint(matched_A_homo, random_kp_idx, param_min_sampled_kp_count, sampled_8point_A_homo);
+	  FillSampledKeypoint(matched_B_homo, random_kp_idx, param_min_sampled_kp_count, sampled_8point_B_homo);
+	  // calculate the point set normalization matrix
+	  CalcuPointSetNormMat(sampled_8point_A_homo, Ha);
+	  CalcuPointSetNormMat(sampled_8point_B_homo, Hb);
+	  // Normalize the point set for A/B
+	  sampled_8point_A_homo_norm = sampled_8point_A_homo*Ha.transpose();
+	  sampled_8point_B_homo_norm = sampled_8point_B_homo*Hb.transpose();
+#ifdef VIPRACC_DEBUG
+	  cout<<sampled_8point_A_homo<<endl;
+	  cout<<"######"<<endl;
+	  cout<<sampled_8point_A_homo_norm<<endl;
+	  cout<<Ha<<endl;
+#endif
+	  // construct coefficient matrix
+
+	  coeff_mat.block<param_min_sampled_kp_count,1>(0,0) = sampled_8point_A_homo_norm.array().block<param_min_sampled_kp_count,1>(0,1)*sampled_8point_B_homo_norm.array().block<param_min_sampled_kp_count,1>(0,1);
+	  coeff_mat.block<param_min_sampled_kp_count,1>(0,1) = sampled_8point_A_homo_norm.array().block<param_min_sampled_kp_count,1>(0,1)*sampled_8point_B_homo_norm.array().block<param_min_sampled_kp_count,1>(0,0);
+	  coeff_mat.block<param_min_sampled_kp_count,1>(0,2) = sampled_8point_A_homo_norm.block<param_min_sampled_kp_count,1>(0,1);
+	  coeff_mat.block<param_min_sampled_kp_count,1>(0,3) = sampled_8point_A_homo_norm.array().block<param_min_sampled_kp_count,1>(0,0)*sampled_8point_B_homo_norm.array().block<param_min_sampled_kp_count,1>(0,1);
+	  coeff_mat.block<param_min_sampled_kp_count,1>(0,4) = sampled_8point_A_homo_norm.array().block<param_min_sampled_kp_count,1>(0,0)*sampled_8point_B_homo_norm.array().block<param_min_sampled_kp_count,1>(0,0);
+	  coeff_mat.block<param_min_sampled_kp_count,1>(0,5) = sampled_8point_A_homo_norm.block<param_min_sampled_kp_count,1>(0,0);
+	  coeff_mat.block<param_min_sampled_kp_count,1>(0,6) =                                                                             sampled_8point_B_homo_norm.block<param_min_sampled_kp_count,1>(0,1);
+	  coeff_mat.block<param_min_sampled_kp_count,1>(0,7) =                                                                             sampled_8point_B_homo_norm.block<param_min_sampled_kp_count,1>(0,0);
+
+	  // solve least square
+	  fundamental_mat.block<1,8>(i,0)=(coeff_mat.transpose() * coeff_mat).ldlt().solve(coeff_mat.transpose() * equation_result_mat).transpose();
+	  // rank-2 enforce of fundamental matrix
+	  BDCSVD<MatrixXf> svd(Ha.transpose()*fundamental_mat.block<1,9>(i,0).reshaped(3,3)*Hb, ComputeThinU | ComputeThinV);
+	  s = svd.singularValues().asDiagonal();
+#ifdef VIPRACC_DEBUG
+	  cout<<"#######singular value########"<<endl;
+	  cout<<s<<endl;
+#endif
+	  s(2,2) = 0.0;
+	  f_mat = svd.matrixU()*s*svd.matrixV().transpose();
+	  // denomalze the fundamental matrix
+	  //f_mat = Ha.transpose()*f_mat*Hb;
+	  // calculate the epipplar-line in frame B
+	  epline_B = matched_A_homo*f_mat;
+#ifdef VIPRACC_DEBUG
+	  cout<<"#######epline_B########"<<endl;
+	  cout<<epline_B<<endl;
+#endif
+	  // calculate point B to the epline in frame B
+	  distance_norm = epline_B.col(0).square()+epline_B.col(1).square();
+	  distance_norm = distance_norm.sqrt();
+	  A2epline_distance = epline_B*matched_B_homo.array();
+	  b2epline_distance.col(i) = abs(A2epline_distance.rowwise().sum());
+	  b2epline_distance.col(i) = b2epline_distance.col(i)/distance_norm;
+#ifdef VIPRACC_DEBUG
+	  cout<<"#######B to epline_B distance########"<<endl;
+	  cout<<b2epline_distance.col(i)<<endl;
+#endif
+	}
+	// select the best case
+	MatrixXi thresholed_distance = (b2epline_distance<threshold).cast<int>();
+	MatrixXi score = thresholed_distance.colwise().sum();
+	// find the index of with maximum number of matches
+	int max_idx = 0;
+	int max_value = -1;
+	for (int i=0; i<score.cols();i++) {
+	  if (score(i)>max_value) {
+	    max_idx = i;
+	    max_value = score(i);
+	  }
+	}
+	MatrixXi selected_matches = thresholed_distance.col(max_idx);
+	for (int i=0; i<selected_matches.rows(); i++) {
+	  if (selected_matches(i)==0) {
+	    int a2bmatch_idx = matched_A_kp_idx[i];
+	    matches[a2bmatch_idx] = -1;
+      }
+	}
+
+
+	float sim_sum = 0.0;
+	int matches_size = a_num;
+	int i;
+	int match_idx;
+	for (i=0;i<matches_size; i++) {
+	  match_idx = *(matches+i);
+	  if (match_idx>=0) {
+	    sim_sum+= *(distance+i);
+	  }
+	}
+	//cout<<sim_sum/sqrt(float(a_num*b_num))<<endl;
+	return sim_sum/sqrt(float(a_num*b_num));
+
+  }*/
+
+    // continue to calculate the a2b frame similarity GOTO THE FOLLOWING CODE DIRECTLY TO CALCULATE.
   //########################## for pairwise ######################################
   else if (alg_type==PAIRWISE) {
     float sim_sum = 0.0;
@@ -535,7 +727,20 @@ float C_PairwiseSimilarityPosGraph(const int a_num, const int b_num,
     // calculate the mean diff
     mean_diff_x/=match_count;
     mean_diff_y/=match_count;
- 
+    //printf ("Mean %f, %f", mean_diff_x,mean_diff_y);
+
+    // absolute the diff and find the maximum diff
+    /*
+    int max_diff_x = 100;
+    int max_diff_y = 100;
+    for (i=0;i<a_num; i++) {
+      match_idx = *(matches+i);
+      if (match_idx>=0) { // found one correspondence
+    	//diff_x[i] = abs(diff_x[i]);  diff_y[i] = abs(diff_y[i]);
+    	if (max_diff_x < abs(diff_x[i])) max_diff_x = abs(diff_x[i]);
+    	if (max_diff_y < abs(diff_y[i])) max_diff_y = abs(diff_y[i]);
+      }
+    } */
     int max_diff_x = 0;
     int max_diff_y = 0;
     for (i=0;i<a_num; i++) {
@@ -565,7 +770,7 @@ float C_PairwiseSimilarityPosGraph(const int a_num, const int b_num,
 
   }
 
-  //######################## for LPG #############################
+  //######################## for pairwise pose graph #############################
 
   else if(alg_type==PAIRWISE_POSGRAPH) {
     //cout<<gauss_y_size<<" "<<gauss_x_size<<endl;
@@ -871,6 +1076,89 @@ int FilterMatchSliceEfficient(const float *match_sm, const int match_sm_W, const
 }
 
 
+
+
+
+
+// multithread function
+// this functin is been assigned with several frame in B
+void* __RowSeg(void* args)
+{
+   //cout<<"Start thread"<<endl;
+   RowSegParam *param = (RowSegParam*)args;
+   int frame_num = param->frame_num;
+   int i;
+   //cout<<"#"<<endl;
+   int match_sm_row_len = param->sm_desc_W;
+   int match_sm_col_len = param->sm_desc_H;
+
+   int mach_slice_h_start = param->sm_slice_h_start;
+   int mach_slice_w_start = param->sm_slice_w_start;
+
+   int a_kp_num = param->a_kp_num;
+   // create matches and distance array
+   int* o_matches=param->_o_a2b_matches_seg;//int matches[a_kp_num];
+   float* o_distance=param->_o_a2b_match_distance_seg;//float distance[a_kp_num];
+   //cout<<"$"<<endl;
+   /*global used variable*/
+   const int* a_pos_patch = param->a_pos_patch;
+
+   const float* gauss_patch = param->gaussian_patch;
+   int    gauss_patch_y_size = param->gauss_y_size;
+   int    gauss_patch_x_size = param->gauss_x_size;
+
+   int alg_type = param->alg_type;
+   //cout<<frame_num<<endl;
+   int fm_dim_y = param->fm_dim_y;
+   int fm_dim_x = param->fm_dim_x;
+
+   const int *a_frame_neighbor_mat = param->a_frame_neighbor_mat;
+   const int *kp_neighbor_num = param->a_frame_kp_neighbor_num;
+   int frame_neighbor_attr_count = param->frame_neighbor_attr_count;
+   /* index for kp in b*/
+   int frame_b_kp_idx_start = 0;
+   /* iterate through each frame in b */
+   for (i=0; i<frame_num; i++) {
+     //cout<<"Processing frame "<<i<<endl;
+     /* calculate mutual match */
+     // number of kp in current b frame
+     int b_kp_num = param->b_frame_kp_num[i];
+
+
+     // slice height and width in sm_desc
+     // a_kp_num  b_kp_num
+     // find mutual match
+     FilterMatchSlice(param->sm_desc, match_sm_row_len, match_sm_col_len,
+                mach_slice_h_start, mach_slice_w_start, a_kp_num, b_kp_num,  //the patch in match_sm the FilterMatch done
+                o_matches+i*a_kp_num, //&matches[0],
+                o_distance+i*a_kp_num); //&distance[0]);
+     //cout<<"frame kp match finished "<<i<<endl;
+
+     if (alg_type != ONLY_PAIRWISE_MATCH) { // include only when alg_type not equal ONLY_PAIRWISE_MATCH
+       /*Calculate similarity of two frame based on the kp mutual match*/
+       const int* b_pos_start_pointer = param->b_pos + (frame_b_kp_idx_start<<1);
+       float similarity = C_PairwiseSimilarityPosGraph(a_kp_num, b_kp_num,
+                                 o_matches+i*a_kp_num, //&matches[0],
+                                 o_distance+i*a_kp_num, //&distance[0],
+                                 a_pos_patch,
+                                 b_pos_start_pointer,
+                                 fm_dim_y, fm_dim_x,
+                                 a_frame_neighbor_mat, kp_neighbor_num, frame_neighbor_attr_count,   //a_frame_neighbor_mat in shape[K,3],  [K,0] is neighbor idx [K,1:2] is pos delta
+                                 gauss_patch, gauss_patch_y_size, gauss_patch_x_size,
+                                 alg_type);
+       // similarity of frame write back
+       //cout << "simililarity for frame:"<< i <<" is " << similarity << endl;
+       *((param->_o_sim_seg)+i) = similarity;
+       /* incremantal by b_kp_num(b frame kp number) */
+       frame_b_kp_idx_start += b_kp_num;
+     }
+     // increment start position in sm_desc slice
+     mach_slice_w_start += b_kp_num;
+     //cout<<b_kp_num<<endl;
+   }
+   pthread_exit(NULL);
+}
+
 /*
  * Get the b frame pos mat start column position in b_pos_mat with the given b frame idx in valid_b_frame
  */
@@ -1156,6 +1444,115 @@ int FilterMatch(const float *match_sm,
 }
 
 
+
+
+int C_PairwiseSimilarityRowPosGraph_MultiThread(
+                                    const float* sm_desc, const int sm_desc_H, const int sm_desc_W,
+                                    const int* a_pos_patch, const int a_kp_num,
+                                    const int* b_pos_mat,
+                                    const int* b_frame_kp_num,
+                                    const int b_frame_num,
+                                    const int fm_dim_y, const int fm_dim_x,
+                                    const int *a_frame_neighbor_mat, const int *kp_neighbor_num, const int frame_neighbor_attr_count,
+                                    const float *gaussian_patch, const int gauss_y_size, const int gauss_x_size,
+                                    const int thread_num,
+                                    const int alg_type,
+                                    float* _o_sm_row,
+                                    // when alg_type == ONLY_PAIRWISE_MATCH the following return the matched result of keypoint in frame A to all in frame B
+
+									// when alg_type == PAIRWISE_RANSAC the following return the matched result of keypoint in frame A to all in frame B
+									// a 0 in _o_a2b_match_distance while the corresponding 1 in _o_a2b_matches means an outliner
+                                    int  * _o_a2b_matches,
+                                    float* _o_a2b_match_distance)
+{
+
+  int i;
+  /* assign b frame interval for each thread */
+  int frame_base_num = b_frame_num/thread_num;
+  int reminder_frame_num = b_frame_num%thread_num;
+  int thread_frame_num_array[thread_num];
+  /*assign each thread number of frame to process*/
+  for (i=0; i<thread_num; i++) {
+    thread_frame_num_array[i] = frame_base_num;
+    if (reminder_frame_num>0) {
+      thread_frame_num_array[i]++;
+      reminder_frame_num--;
+    }
+  }
+  /* In case frame number smaller than required thread number*/
+  int true_thread_num=0;
+  for (i=0; i<thread_num; i++) {
+    if (thread_frame_num_array[i]==0) {
+      break;
+    }
+    true_thread_num++;
+  }
+
+  //cout<<"Creating thread "<<true_thread_num << endl;
+
+  pthread_t tids[true_thread_num];
+
+  RowSegParam param[true_thread_num]={};
+  int thread_start_frame_idx = 0;
+  int thread_end_frame_idx = 0;
+  long b_all_kp_idx=0;
+  for(int i = 0; i < true_thread_num; i++){
+    thread_start_frame_idx = thread_end_frame_idx;
+    thread_end_frame_idx  = thread_start_frame_idx+thread_frame_num_array[i];
+    /* assign param for each Thread */
+    param[i].frame_num = thread_frame_num_array[i]; // the number of frame to process
+    // similarity matrix patch
+    param[i].sm_desc = sm_desc; // start address of sm patch
+    // sm_desc slice rectangle
+    param[i].sm_slice_h_start = 0;  // sm patch slice height
+    param[i].sm_slice_w_start = b_all_kp_idx;  // sm patch slice width
+
+    // the dimension of entire sm_desc
+    param[i].sm_desc_H = sm_desc_H;
+    param[i].sm_desc_W = sm_desc_W;
+    //
+    param[i].a_pos_patch               = a_pos_patch;
+    param[i].a_kp_num                  = a_kp_num;
+    param[i].a_frame_neighbor_mat      = a_frame_neighbor_mat;
+    param[i].a_frame_kp_neighbor_num           = kp_neighbor_num;
+    param[i].frame_neighbor_attr_count = frame_neighbor_attr_count;
+    //
+    param[i].b_pos          = b_pos_mat+(b_all_kp_idx<<1);
+    param[i].b_frame_kp_num = b_frame_kp_num + thread_start_frame_idx; // holds number of kp in each frame in b
+    //
+    param[i].gaussian_patch = gaussian_patch;
+    param[i].gauss_y_size   = gauss_y_size;
+    param[i].gauss_x_size   = gauss_x_size;
+    //
+    param[i].alg_type = alg_type;
+
+    param[i].fm_dim_x = fm_dim_x;
+    param[i].fm_dim_y = fm_dim_y;
+    //
+    param[i]._o_sim_seg = _o_sm_row+thread_start_frame_idx;
+
+    param[i]._o_a2b_matches_seg = _o_a2b_matches+(thread_start_frame_idx*a_kp_num);
+    param[i]._o_a2b_match_distance_seg = _o_a2b_match_distance+(thread_start_frame_idx*a_kp_num);
+
+    for (int j=thread_start_frame_idx; j<thread_end_frame_idx; j++) {
+      b_all_kp_idx += *(b_frame_kp_num+j);
+    }
+    int ret = pthread_create(&tids[i], NULL, __RowSeg, (void*)(&param[i]));
+    if (ret != 0){
+           cout << "pthread_create error: error_code=" << ret << endl;
+    }
+  }
+
+
+  // wait thread finish
+  for(i = 0; i < true_thread_num; i++)
+    pthread_join(tids[i], NULL);
+
+  return 0;
+}
+
+
+
 void __FindFrameSpatialClosestNeighbor(const int* frame_pos_patch, const int frame_kp_num,
 		                        const int neighbor_win_y, const int neighbor_win_x,
 								const int frame_neighbor_attr_count,
@@ -1413,4 +1810,184 @@ int C_PairwiseSimilarityVersatile_MultiThread(
 
 }//end of extern C
 
+
+
+
+/******
+ * Fetch the matched correspondence into the output matrix.
+ *a_pos: pointer to position of keypont group A in normal coordinate
+ *b_pos: pointer to position of keypont group B in normal coordinate
+ *a2b_matches: matched distance of A in B
+ *a2b_match_len: length of a2b_matches
+ *_o_A/B_mat: reference to Output matched correspondences in homogeneous coordinate. This matrix must in size (a2b_match_len,3) and in type float
+ *****/
+
+/*
+int main(int argc, char **argv) {
+  srand((unsigned)time(NULL));
+
+  ArrayXXf Point3D_array=ArrayXXf::Random(100, 4); // x,y,z
+  Point3D_array.col(2)=ArrayXXf::Random(100,1)*2.0+5.0;
+  //Point3D_array = Point3D_array;
+  //Point3D_array = Point3D_array;
+
+  MatrixXf Point3D_mat0 = Point3D_array.matrix();
+
+  Point3D_mat0.block<100,1>(0,3)=MatrixXf::Ones(100,1);
+  MatrixXf trans_mat(4,4);
+  float deg = 3.141593*(23.0/180.0);
+  trans_mat<<   cos(deg),     0,   sin(deg),    0,
+		        0,            1,   0,           0,
+				-sin(deg),    0,   cos(deg),    0,
+			    0,            0,   0,           1;
+  MatrixXf Point3D_mat1 = Point3D_mat0*trans_mat.transpose();
+
+  cout << Point3D_mat0 <<endl<<"####"<<endl;
+  cout << Point3D_mat1<<endl;
+
+  int a_pos[200];
+  int b_pos[200];
+  float z0;
+  float z1;
+  int a2b_matches[100];
+  for (int i=0; i<200; i+=2) {
+    z0 = Point3D_mat0(i/2, 2);
+    z1 = Point3D_mat1(i/2, 2);
+	a_pos[i]   = (Point3D_mat0(i/2, 1)/z0)*500;
+	a_pos[i+1] = (Point3D_mat0(i/2, 0)/z0)*500;
+	b_pos[i]   = (Point3D_mat1(i/2, 1)/z1)*500;
+	b_pos[i+1]   = (Point3D_mat1(i/2, 0)/z1)*500;
+	a2b_matches[i/2]=i/2;
+
+  }
+  int outliner_idx[30];
+  for (int i=0; i<10;i++){
+    int idx =i;//rand()%100;
+    a_pos[idx<<1]=rand()%100;
+    a_pos[(idx<<1)+1]=rand()%100;
+    outliner_idx[i]=idx;
+    //a2b_matches[idx]=-1;
+  }
+  a_pos[20<<1]=rand()%100;
+  a_pos[(20<<1)+1]=rand()%100;
+  a_pos[30<<1]=rand()%100;
+  a_pos[(30<<1)+1]=rand()%100;
+  a_pos[40<<1]=rand()%100;
+  a_pos[(40<<1)+1]=rand()%100;
+
+
+  // initialize random number generator
+  srand((unsigned)time(NULL));
+
+  // find all matched keypoint
+#define param_min_sampled_kp_count  10
+  int param_ransac_try_count = 50;
+  float threshold = 10.0;
+
+  int a_num = 100;
+  int b_num = 100;
+  unsigned int matched_A_kp_idx[100];
+  int matched_count = ProbeMatchCount(a2b_matches, a_num, matched_A_kp_idx);
+  MatrixXf matched_A_homo(matched_count,3);
+  MatrixXf matched_B_homo(matched_count,3);
+  matched_count = FetchMatchedCorrespondence(a_pos, b_pos, a2b_matches, a_num, matched_A_homo, matched_B_homo);
+  // check if matched point is smaller than 16
+  if (matched_count<param_min_sampled_kp_count) {
+	// if matched point smaller than the required number of matches return frame similarity 0.0
+    return 0.0;
+  }
+  // random select 8 matched keypoints and calculate the fundamental matrix
+  MatrixXf fundamental_mat=MatrixXf::Ones(param_ransac_try_count, 9);
+  MatrixXf coeff_mat(param_min_sampled_kp_count, 8);
+  MatrixXf sampled_8point_A_homo(param_min_sampled_kp_count,3);
+  MatrixXf sampled_8point_B_homo(param_min_sampled_kp_count,3);
+  MatrixXf sampled_8point_A_homo_norm(param_min_sampled_kp_count,3);
+  MatrixXf sampled_8point_B_homo_norm(param_min_sampled_kp_count,3);
+  //point set normalization matrix
+  MatrixXf Ha=MatrixXf::Zero(3,3);
+  MatrixXf Hb=MatrixXf::Zero(3,3);
+
+  // some matrix and variable
+  MatrixXf equation_result_mat=MatrixXf::Constant(param_min_sampled_kp_count,1,-1.0);
+  int random_kp_idx[param_min_sampled_kp_count];
+
+  // variables for calculate the diszance to epline
+  MatrixXf s(3,3);
+  MatrixXf f_mat(3,3);
+  ArrayXXf epline_B(matched_count,3);
+  ArrayXXf distance_norm(matched_count,1);
+  ArrayXXf A2epline_distance(matched_count,3);
+  ArrayXXf distance(matched_count,param_ransac_try_count);
+
+  for (int i=0; i<param_ransac_try_count; i++) {
+	//generate random N(param_min_sampled_kp_count) number from 0 to total matched keypoints(matched_count)
+    Random_0_N_Array(matched_count ,random_kp_idx, param_min_sampled_kp_count);
+    //fill the sampled_8point_A/B_homo with the sampled point
+    FillSampledKeypoint(matched_A_homo, random_kp_idx, param_min_sampled_kp_count, sampled_8point_A_homo);
+    FillSampledKeypoint(matched_B_homo, random_kp_idx, param_min_sampled_kp_count, sampled_8point_B_homo);
+    // calculate the point set normalization matrix
+    CalcuPointSetNormMat(sampled_8point_A_homo, Ha);
+    CalcuPointSetNormMat(sampled_8point_B_homo, Hb);
+    // Normalize the point set for A/B
+    sampled_8point_A_homo_norm = sampled_8point_A_homo*Ha.transpose();
+    sampled_8point_B_homo_norm = sampled_8point_B_homo*Hb.transpose();
+    //cout<<sampled_8point_A_homo_norm<<endl;
+    //cout<<Ha<<endl;
+    // construct coefficient matrix
+
+    coeff_mat.block<param_min_sampled_kp_count,1>(0,0) = sampled_8point_A_homo_norm.array().block<param_min_sampled_kp_count,1>(0,1)*sampled_8point_B_homo_norm.array().block<param_min_sampled_kp_count,1>(0,1);
+    coeff_mat.block<param_min_sampled_kp_count,1>(0,1) = sampled_8point_A_homo_norm.array().block<param_min_sampled_kp_count,1>(0,1)*sampled_8point_B_homo_norm.array().block<param_min_sampled_kp_count,1>(0,0);
+    coeff_mat.block<param_min_sampled_kp_count,1>(0,2) = sampled_8point_A_homo_norm.block<param_min_sampled_kp_count,1>(0,1);
+    coeff_mat.block<param_min_sampled_kp_count,1>(0,3) = sampled_8point_A_homo_norm.array().block<param_min_sampled_kp_count,1>(0,0)*sampled_8point_B_homo_norm.array().block<param_min_sampled_kp_count,1>(0,1);
+    coeff_mat.block<param_min_sampled_kp_count,1>(0,4) = sampled_8point_A_homo_norm.array().block<param_min_sampled_kp_count,1>(0,0)*sampled_8point_B_homo_norm.array().block<param_min_sampled_kp_count,1>(0,0);
+    coeff_mat.block<param_min_sampled_kp_count,1>(0,5) = sampled_8point_A_homo_norm.block<param_min_sampled_kp_count,1>(0,0);
+    coeff_mat.block<param_min_sampled_kp_count,1>(0,6) =                                                                             sampled_8point_B_homo_norm.block<param_min_sampled_kp_count,1>(0,1);
+    coeff_mat.block<param_min_sampled_kp_count,1>(0,7) =                                                                             sampled_8point_B_homo_norm.block<param_min_sampled_kp_count,1>(0,0);
+
+    // solve least square
+    fundamental_mat.block<1,8>(i,0)=(coeff_mat.transpose() * coeff_mat).ldlt().solve(coeff_mat.transpose() * equation_result_mat).transpose();
+    // rank-2 enforce of fundamental matrix
+    BDCSVD<MatrixXf> svd(Ha.transpose()*fundamental_mat.block<1,9>(i,0).reshaped(3,3)*Hb, ComputeThinU | ComputeThinV);
+    s = svd.singularValues().asDiagonal();
+    cout<<s<<endl;
+    s(2,2) = 0.0;
+    f_mat = svd.matrixU()*s*svd.matrixV().transpose();
+    // denomalze the fundamental matrix
+    //f_mat = Ha.transpose()*f_mat*Hb;
+    // calculate the epipplar-line in frame B
+    epline_B = matched_A_homo*f_mat;
+    cout<<epline_B<<endl;
+    // calculate point B to the epline in frame B
+    distance_norm = epline_B.col(0).square()+epline_B.col(1).square();
+    distance_norm = distance_norm.sqrt();
+    A2epline_distance = epline_B*matched_B_homo.array();
+    distance.col(i) = abs(A2epline_distance.rowwise().sum());
+    distance.col(i) = distance.col(i)/distance_norm;
+
+    cout<<distance.col(i)<<endl;
+
+  }
+  // select the best case
+  MatrixXi thresholed_distance = (distance<threshold).cast<int>();
+  MatrixXi score = thresholed_distance.colwise().sum();
+  // find the index of with maximum number of matches
+  int max_idx = 0;
+  int max_value = -1;
+  for (int i=0; i<score.cols();i++) {
+    if (score(i)>max_value) {
+      max_idx = i;
+      max_value = score(i);
+    }
+  }
+  MatrixXi selected_matches = thresholed_distance.col(max_idx);
+  for (int i=0; i<selected_matches.rows(); i++) {
+	if (selected_matches(i)==0) {
+      int a2bmatch_idx = matched_A_kp_idx[i];
+      a2b_matches[a2bmatch_idx] = -1;
+	}
+
+  }
+  cout<<thresholed_distance<<endl;
+  return 0;
+}*/
 

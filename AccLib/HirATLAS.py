@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License 
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+
 from Acc_HirATLAS import *  
 import numpy as np
 import scipy.io
@@ -24,8 +25,8 @@ class HirATLAS(CAccFeatureMatch, CAccMatrixEx):
   # DB_xxxx_files are list with string of the absolute file path
   def __init__(self, DB_LocFeature_files=[], DB_LocFeature_loc_files=[], DB_loc_H=100, DB_loc_W=100, \
                DB_HolFeature_files=[], \
-               acc_file='/home/fangming/svn_test/SVN_repository/PHD/RTX3090/lib/FeatureMatchAcc.so', \
-               cuda_acc_file = '/home/fangming/svn_test/SVN_repository/PHD/RTX3090/lib/cudaPrj/cuVIPRACCLib/Debug/libcuVIPRACCLib', \
+               acc_file='', \
+               cuda_acc_file = '', \
                DB_kp_spatial_closest_neighbor_files=[], DB_kp_spatial_closest_neighbor_delimiter_files=[], \
                gauss2d_y_size = 150, gauss2d_x_size = 150,\
                gauss_patch_x_size = 410, gauss_patch_y_size = 410,\
@@ -33,14 +34,15 @@ class HirATLAS(CAccFeatureMatch, CAccMatrixEx):
                enable_topK=True,\
                DB_feature_gpu_preload = False,\
                Feature_dtype="FP32",\
-               DB_feature_normalize = True):#indicate if normalize the DB feature during preload to GPU memory 
+               DB_feature_normalize = True,\
+               TopN_retrieve_thread_num=1):#indicate if normalize the DB feature during preload to GPU memory 
     #super(ImgSimilarityRANSAC, self).__init__(acc_file) # initialize CAccFeatureMatch class
     #super(ImgSimilarityRANSAC, self).__init__() # initialize CAccMatrix class
     CAccFeatureMatch.__init__(self, acc_file)
     CAccMatrixEx.__init__(self, acc_file=cuda_acc_file)
     
     self.feature_storage_type, self.feature_dtype_digit = self.Dtype2Digit(Feature_dtype)
-    self.MatAcc_InitMatAccExEnv(self.feature_dtype_digit)
+    self.MatAcc_InitMatAccExEnv(self.feature_dtype_digit, TopN_retrieve_thread_num)
     self.MatAcc_Init_cuVIPRMatAcc()     # Initialize the legacy VPRMatAcc because need to use the NormalizeBatchVectorFP32 function 
     #super().__init__(acc_file)
     self.DB_feature_gpu_preload = DB_feature_gpu_preload
@@ -60,9 +62,9 @@ class HirATLAS(CAccFeatureMatch, CAccMatrixEx):
     self.db_frame_loc_feature_start_idx = [] # in shape [place_N] type int. each holds the local features start idx in each db frame
     self.db_HolFeature_cache = []            # in shape [place_N, 4096]
     
-    self.db_kp_spatial_closest_neighbor_cache = []            # in shape [place_N] type Object. each object is np array has shape [LocFeature_N, 3] 
-    self.db_kp_spatial_closest_neighbor_delimiter_cache = []  # in shape [place_N] type Object. each object is np array has shape [LocFeature_N]
-    self.db_kp_spatial_closest_neighbor_frame_start_idx = []  # in shape [place_N] type int. each is the index of db_kp_spatial_closest_neighbor_cache of closest neighbor for each database frame
+    self.db_kp_spatial_closest_neighbor_cache           = np.zeros((10), dtype=np.int32)  # in shape [place_N] type Object. each object is np array has shape [LocFeature_N, 3] 
+    self.db_kp_spatial_closest_neighbor_delimiter_cache = np.zeros((10), dtype=np.int32)  # in shape [place_N] type Object. each object is np array has shape [LocFeature_N]
+    self.db_kp_spatial_closest_neighbor_frame_start_idx = np.zeros((10), dtype=np.int32)  # in shape [place_N] type int. each is the index of db_kp_spatial_closest_neighbor_cache of closest neighbor for each database frame
     
     self.db_HolFeature_mean = []
     
@@ -237,8 +239,8 @@ class HirATLAS(CAccFeatureMatch, CAccMatrixEx):
         feature = np.concatenate(feature)
         if self.DB_feature_normalize==True:
           feature = self.NormalizeFeatures(feature)
-        print (feature.shape)
-        self.AttachGPU_DB_feature(feature, batch_db_frame_num, batch_db_frame_kp_num_array)
+        print ("load partial DB local feature with shape:",feature.shape)
+        self.AttachGPU_DB_feature(feature, batch_db_frame_num, batch_db_frame_kp_num_array, self.feature_storage_type)
     else:
       for i in range(0,len(DB_LocFeature_files)):
         # feature in shape [PlaceNum] object.Each in shape[frame_KpNum, Feature_dim]
@@ -251,7 +253,9 @@ class HirATLAS(CAccFeatureMatch, CAccMatrixEx):
         feature = np.concatenate(feature)
         if self.DB_feature_normalize==True:
           feature = self.NormalizeFeatures(feature)
-        self.AttachGPU_DB_feature(feature, batch_db_frame_num, batch_db_frame_kp_num_array)       
+        print ("load partial DB local feature with shape:",feature.shape)
+        print (feature)
+        self.AttachGPU_DB_feature(feature, batch_db_frame_num, batch_db_frame_kp_num_array, self.feature_storage_type)       
   
   # is_load_closest_neighbor: this is to indicate if the keypoint closest neighbor file is loaded (this is to let the code to compatiable to load DELF feature)
   def __LoadDB_cache(self, DB_LocFeature_files, DB_LocFeature_loc_files, is_load_closest_neighbor=False):
@@ -808,6 +812,7 @@ class HirATLAS(CAccFeatureMatch, CAccMatrixEx):
     #DBtopN_KP_neighbor_start_idx          = np.zeros((2,2),dtype=np.int32)    
     # concatenate the kp feature
     kp_feature_query = np.concatenate(kp_feature_query_list, axis=0)
+    kp_feature_query  = kp_feature_query.astype(self.feature_storage_type)
     #print ("query feature num %d"%(kp_feature_query.shape[0]))  
     query2db_sim = np.zeros((self.db_place_number,query_K), dtype=np.float32)
     top_N_idx_vect = []   # in shape [K,retrieve_top_N]. The top N candidates positions in the database for each query (totally K queries). The N defined by retrieve_top_N         

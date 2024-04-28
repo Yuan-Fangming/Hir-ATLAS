@@ -1,19 +1,20 @@
-/* 
+/*
  * This file is part of the Hir-ATLAS distribution (https://github.com/Yuan-Fangming/Hir-ATLAS).
  * Copyright (c) 2024 Fangming Yuan.
- * 
- * This program is free software: you can redistribute it and/or modify  
- * it under the terms of the GNU General Public License as published by  
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 2.
  *
- * This program is distributed in the hope that it will be useful, but 
- * WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License 
+ * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
+
 
 /*
  * cuVIPRMatAcc.hpp
@@ -31,6 +32,7 @@
 #include <cuda_runtime.h>
 #include "cublas_v2.h"
 #include <cublasLt.h>
+#include <vector>
 
 typedef unsigned char            uint8;
 typedef signed char              int8;
@@ -239,6 +241,7 @@ public:
 		mat_next_fill_line = 0;
 		bytecount = 1;
 		mat=(void*)0;
+		lock_mem_release= false;
 	}
 
     /*  Set the matrix data type byte count
@@ -246,6 +249,14 @@ public:
 	void SetMatrixDtypeCount(const cudaDataType cuDtype, const DtypeCount_t bytecount);
 
 	DtypeCount_t GetMatrixDtypeCount(void);
+	cudaDataType GetMatrixDtype(void);
+	/* Set GPU memory to this Mat
+	 * mem: The pointer of the GPU memory set to this Mat
+	 * h/w: height and width of the matrix.
+	 * return: CU_VPR_ACC_SUCCESS if GPU memory allocation success.
+	 *         CU_VPR_ACC_FAILED if GPU memory allocation failed.
+	 * */
+    uint8 SetMatGpuMem(const void* mem, const MatDim_t h, const MatDim_t w);
 
 	/* Allocate GPU memory for the Matrix
 	 * h/w: The allocated matrix size of the gpu memory, where w is the leading dimension.
@@ -253,6 +264,7 @@ public:
 	 *         CU_VPR_ACC_FAILED if GPU memory allocation failed
 	 */
     uint8 allocMatGpuMem(const MatDim_t h, const MatDim_t w);
+
     /* This function release the gpu memory allocated by the function "allocMatGpuMem"
      */
     uint8 ReleaseMatGpuMem(void);
@@ -276,6 +288,13 @@ public:
      * h/w: the reshaped height and width value for the new dimension of the matrix in GPU
      * */
     uint8 DynamicReshapeMatGpu(const MatDim_t h, const MatDim_t w);
+
+    /* Not release GPU memory if the memory is big enough for the operation.
+     * */
+    uint8 AdaptiveFillMatGpuData(const MatDim_t h, const MatDim_t w, const void* data);
+    uint8 AdaptiveReshapeMatGpu(const MatDim_t h, const MatDim_t w);
+
+
     /* Allocate Matrix GPU desc
      * */
     uint8 allocGpuMatDesc(void);
@@ -351,8 +370,9 @@ public:
 	void dbg_PrintMember(void);
 	template <typename T> void dbg_PrintMat(uint64 top);
 private:
+	bool lock_mem_release; // indicate if lock the mat memory release and re-allocate. Used for situation when this Mat is a sub-matrix of a bigger matrix, which both share the same memory.
 	void* mat;        // allocated CPU/GPU memory space to store the matrix
-    uint64 mem_entry_size;  // number of entry can be hold by the memory
+    uint64 mem_entry_size;  // memory entry size of the allocated memory.
     MatDataOrder mat_data_order;
 	MatDim_t mat_h;    // matrix height
 	MatDim_t mat_w;    // matrix width. The leading dimension of mat
@@ -366,7 +386,12 @@ private:
 
 class cuVPRMatAccEnv{
 public:
-	cuVPRMatAccEnv(const cudaDataType cuDtype, const DtypeCount_t bytecount);
+	/* Class Constructor.
+	 * cuDtype:  The local feature datatype
+	 * bytecount: number of byte of cuDtype
+	 * retrieve_thread_num: The number of thread used for the TopN candidate local feature comparison
+	 * */
+	cuVPRMatAccEnv(const cudaDataType cuDtype, const DtypeCount_t bytecount, const uint32 retrieve_thread_num);
 
 	void GetPtrAttrbute(void* ptr);
 
@@ -423,9 +448,15 @@ public:
 
     /*This function takes column-major matrix input*/
     int32 Query(const MatDim_t loc_feature_dim, const MatDim_t loc_feature_num, const void* data, fp32* result);
+
+    void QueryNSeg(const int32 threadId,
+            const int32 N, const int32* data_base_N_idx, const int32* topN_frame_kp_num, const int32* topN_frame_kp_col_start,
+			const int32 topN_idx_from, const int32 topN_idx_to,
+			const MatDim_t loc_feature_num_rectified, const MatDim_t actual_query_loc_feature_num,
+		    fp32* result);
     /*This function takes column-major matrix input*/
     int32 QueryN(const MatDim_t q_mat_h, const MatDim_t q_mat_w,
-                 const void* q_mat,
+                 const void* data,
 			     const int32 N, const int32* data_base_N_idx, const int32 total_db_kp,
 			     fp32* result);
 private:
@@ -434,23 +465,32 @@ private:
 	cublasLtMatmulPreference_t preference = NULL;
 
 
+	/*************Data types**************/
+    cudaDataType local_feature_datatype;
+	DtypeCount_t local_feature_datatype_bytecount;
+
+    cudaDataType local_feature_query_result_datatype;
+    DtypeCount_t local_feature_query_result_datatype_bytecount;
 	/***************** Database matrix*****************/
 	/*Hol feature matrix */
 	CuVPRAccMat DB_hol_mat;
 	/*local feature matrix */
 	CuVPRAccMat DB_local_feature_mat;
+	std::vector<CuVPRAccMat*> DB_each_frame_local_feature_mat_list; // CuVPRAccMat for each frame in the database. (for multi-thread topN query)
 
     // following variable to achieve dynamic base matrix assignment
     uint32 db_frame_num;   // total number of frame in the DB
     //int32 attached_db_frame_num;  // number of frame that had already attached.
     CuVPRAccMat db_each_frame_keypoint_num_mat;  // array in size db_frame_num. It sequentially store the number of keypoint number for each of the database frame
-    CuVPRAccMat db_frame_base_mat_start_col_mat; // array in size db_frame_num. It sequentially store the column idx of the first local feature ofeach frame in the base mat
+    CuVPRAccMat db_frame_base_mat_start_col_mat; // array in size db_frame_num. It sequentially store the column idx of the first local feature of each frame in the base mat
 
 
     /***************Query and result matrix****************/
     // local feature query and result mat
     CuVPRAccMat query_local_feature_mat;         // Query keypoint feature variables
     CuVPRAccMat local_feature_query_result_mat;  // Query and database cross similarity results variables
+    std::vector<CuVPRAccMat*> local_feature_query_result_mat_list_retrieve_for_each_thread; // the query result matrix desc for multi-thread topN query
+
     // holistic feature query and result mat
     CuVPRAccMat query_hol_mat;          // holistic feature query mat
 	CuVPRAccMat hol_query_result_mat;   // holistic feature query result mat
@@ -464,17 +504,28 @@ private:
     /*****************cuBlasLt matmul desc******************/
     cublasLtMatmulDesc_t HolFeatureQueryDesc = NULL;           // matmul for holistic feature query
     cublasLtMatmulPreference_t HolFeatureQueryMatmul_preference = NULL;
-    //cublasLtMatmulHeuristicResult_t HolFeatureQueryMatmul_heuristicResult = {};
+
 
     cublasLtMatmulDesc_t LocalFeatureQueryDesc = NULL;         // matmul for local feature query in all DB frame local feature
     cublasLtMatmulPreference_t LocalFeatureQueryMatmul_preference = NULL;
 
+    std::vector<cublasLtMatmulDesc_t>         LocalFeatureQueryDesc_each_frame_list;
+    std::vector<cublasLtMatmulPreference_t>   LocalFeatureQueryMatmul_preference_each_frame_list;
 
     cublasOperation_t TRANSPOSE;
     cublasOperation_t NO_TRANSPOSE;
 
 
-
+    /*****************TopN candidate retrieve********************/
+    uint32 retrieve_thread_num;
+    uint32 last_topN;
+    std::vector<uint32> retrieve_thread_jobs;
+    void Test(uint8 i);
+    /* equally assign the topN retrieve jobs for each retrieve_thread.
+     * This function influence retrieve_thread_jobs
+     * topN:                   Indicate the number of candidates
+     * */
+    void __AssignTopNJobs(const uint32 topN);
 };
 /* Check the cublas status and print the error code if error occur
  * stste: the cublas status returned by the cublas function
@@ -499,7 +550,7 @@ extern "C" {
 #define DTYP_FP32      4
 #define DTYP_INT8      5
 //#define DTYP_INT16     6
-extern void InitMatAccExEnv(const uint32 feature_datatype);
+extern void InitMatAccExEnv(const uint32 feature_datatype, const uint32 topN_retrieve_thread_num);
 extern int32 malloDataBaseMat(const int32 mat_h,  const int32 mat_w, const int32 db_frame_num);
 extern int32 SetDBInfo(const int32 *db_frame_keypoint_num, const int32 *db_frame_base_mat_start_col);
 /* The data use uint8 data type pass the local feature matrix start address
@@ -512,7 +563,10 @@ extern int32 BatchAttachHolFeature(const MatDim_t hol_f_num,  const MatDim_t hol
 
 extern int32 BatchQueryHolisticFeature(const int32 mat_h,  const int32 mat_w,  const uint8* data, fp32* result);
 extern int32 BatchQueryDataBase(const int32 mat_h,  const int32 mat_w,  const uint8* data, fp32* result);
-
+extern int32 QueryDataBaseN(const int32 mat_h, const int32 mat_w,
+		                    const uint8* data,
+		                    const int32 N, const int32* data_base_N_idx, const int32 total_db_kp,
+		                    fp32* result);
 /*************************Convert FP32 to *Datatype ***********************/
 /*These two function convert a Vector or Matrix from FP32 data type into FP8 (E4M3 or E5M2)
  * This function assumes the matFP8e4m3 with length of "size" is pre-allocated in the CPU memory.

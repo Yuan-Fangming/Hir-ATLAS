@@ -1,19 +1,20 @@
-/* 
+/*
  * This file is part of the Hir-ATLAS distribution (https://github.com/Yuan-Fangming/Hir-ATLAS).
  * Copyright (c) 2024 Fangming Yuan.
- * 
- * This program is free software: you can redistribute it and/or modify  
- * it under the terms of the GNU General Public License as published by  
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 2.
  *
- * This program is distributed in the hope that it will be useful, but 
- * WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License 
+ * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
+
 
 /*
  * cuVIPRMatAcc.cpp
@@ -32,6 +33,9 @@
 #include <cublasLt.h>
 #include "cuda_fp8.h"
 #include "cuVIPRMatAcc.hpp"
+#include <thread>
+#include <vector>
+
 using namespace std;
 static cuVIPRMatAccEnv MatAccEnv;
 int32 Init_cuVIPRMatAcc(void)
@@ -659,7 +663,7 @@ int32 NormalizeBatchVectorFP32(const int32 vect_dim, const int32 vect_num, const
 					 norm+i                // out norm value in host
                );
         if (stat != CUBLAS_STATUS_SUCCESS) {
-            printf("Calculate norm2 failed\n");
+            printf("************Calculate norm2 failed**************\n");
             cudaFree(batch_norm_mem);
             return CU_VIPR_MAT_ACC_ERR;
         }
@@ -707,6 +711,25 @@ DtypeCount_t CuVPRAccMat::GetMatrixDtypeCount(void)
 {
 	return this->bytecount;
 }
+cudaDataType CuVPRAccMat::GetMatrixDtype(void)
+{
+    return this->cuDtype;
+}
+
+uint8 CuVPRAccMat::SetMatGpuMem(const void* mem, const MatDim_t h, const MatDim_t w)
+{
+
+    this->mat_next_fill_line = 0;
+
+    this->mat_h = h;
+	this->mat_w = w;
+    this->mat_size = h*w;
+
+    this->mem_entry_size = mat_size;
+    this->mat = (void*)mem;
+    return CU_VPR_ACC_SUCCESS;
+}
+
 uint8 CuVPRAccMat::allocMatGpuMem(const MatDim_t h, const MatDim_t w)
 {
 	uint32 bytes = h*w*this->bytecount;
@@ -715,9 +738,8 @@ uint8 CuVPRAccMat::allocMatGpuMem(const MatDim_t h, const MatDim_t w)
 	//  bytes+=16-reminder;
 	if (cudaMalloc(reinterpret_cast<void**>(&(this->mat)), bytes) == cudaSuccess) {
 		//printf ("Successfully allocate DB GPU memory.\n");
-
-	    this->mat_size = h*w;
-	    this->mem_entry_size = this->mat_size;
+		this->mat_size = h*w;
+	    this->mem_entry_size = mat_size;
 	    this->mat_next_fill_line = 0;
 
 	    this->mat_h = h;
@@ -736,16 +758,16 @@ uint8 CuVPRAccMat::ReleaseMatGpuMem(void)
 		this->mat_next_fill_line = 0;
 		this->mat_h = 0;
 		this->mat_w = 0;
-		this->mat_size = 0;
 		this->mem_entry_size = 0;
+		this->mat_size = 0;
 		return CU_VPR_ACC_SUCCESS;
 	}
 	if (cudaFree(this->mat)==cudaSuccess) {
 		this->mat_next_fill_line = 0;
 		this->mat_h = 0;
 		this->mat_w = 0;
-		this->mat_size = 0;
 		this->mem_entry_size = 0;
+		this->mat_size = 0;
 		this->mat = (void*)0;
 		return CU_VPR_ACC_SUCCESS;
 	} else {
@@ -790,6 +812,48 @@ uint8 CuVPRAccMat::DynamicReshapeMatGpu(const MatDim_t h, const MatDim_t w)
 
     return CU_VPR_ACC_SUCCESS;
 }
+
+
+
+
+uint8 CuVPRAccMat::AdaptiveFillMatGpuData(const MatDim_t h, const MatDim_t w, const void* data)
+{
+    if (h*w>this->mem_entry_size) {
+    	this->ReleaseMatGpuMem();       // release GPU memory
+    	this->allocMatGpuMem(h,w);      // allocate new GPU memory
+    	this->SetGpuMatDesc(h, w);      // alter the GPU mat desc
+    } else {
+    	this->mat_w = w;
+    	this->mat_h = h;
+    	this->mat_size = w*h;
+    	this->SetGpuMatDesc(h, w);
+    }
+    // fill data
+    mat_next_fill_line = 0; // mat reset next fill line
+	if (mat_data_order==ROW_MAJOR)
+		this->AttachDataToMat(h, data);
+	else
+		this->AttachDataToMat(w, data);
+
+    return CU_VPR_ACC_SUCCESS;
+}
+uint8 CuVPRAccMat::AdaptiveReshapeMatGpu(const MatDim_t h, const MatDim_t w)
+{
+    if (h*w>this->mem_entry_size) {
+    	this->ReleaseMatGpuMem();       // release GPU memory
+    	this->allocMatGpuMem(h,w);      // allocate new GPU memory
+    	this->SetGpuMatDesc(h, w);      // alter the GPU mat desc
+    }
+    else {
+    	this->mat_w = w;
+    	this->mat_h = h;
+    	this->mat_size = w*h;
+    	this->SetGpuMatDesc(h, w);
+    }
+
+    return CU_VPR_ACC_SUCCESS;
+}
+
 uint8 CuVPRAccMat::allocGpuMatDesc(void)
 {
 	if (cublasLtMatrixLayoutCreate(&(this->mat_desc), this->cuDtype, 0, 0, 0)==CUBLAS_STATUS_ALLOC_FAILED) {
@@ -844,6 +908,7 @@ uint8 CuVPRAccMat::allocMatCpuMem(const MatDim_t h, const MatDim_t w)
 	this->mat_h = h;
 	this->mat_w = w;
 	this->mat_size = h*w;
+	this->mem_entry_size = mat_size;
 	return CU_VPR_ACC_SUCCESS;
 }
 
@@ -896,7 +961,7 @@ void* CuVPRAccMat::GetMatPtr(void)
 }
 uint8 CuVPRAccMat::GetGpuData(void *data)
 {
-	uint64 cpy_size = this->mem_entry_size*this->bytecount;
+	uint64 cpy_size = this->mat_size*this->bytecount;
 	cudaError_t err;
 	err = cudaMemcpy(data, this->mat, cpy_size, cudaMemcpyDeviceToHost);
 	switch(err) {
@@ -920,7 +985,6 @@ uint8 CuVPRAccMat::GetGpuData(void *data)
 uint8 CuVPRAccMat::GetMatGpuDataParitalRow(void* data, const MatDim_t partial_row_length)
 {
 	{
-		uint64 cpy_size = this->mem_entry_size*this->bytecount;
 		uint64 row_size_bytes = partial_row_length*this->bytecount;
 		cudaError_t err;
 		if (this->mat_data_order == COL_MAJOR)
@@ -1022,8 +1086,11 @@ template <typename T> void CuVPRAccMat::dbg_PrintMat(uint64 top)
 	printf ("\n");
 }
 
-cuVPRMatAccEnv::cuVPRMatAccEnv(const cudaDataType cuDtype, const DtypeCount_t bytecount)
+
+cuVPRMatAccEnv::cuVPRMatAccEnv(const cudaDataType cuDtype, const DtypeCount_t bytecount, const uint32 retrieve_thread_num=8)
 {
+    this->local_feature_datatype   =  cuDtype;
+    this->local_feature_datatype_bytecount = bytecount;
 
 	if (cublasLtCreate(&(this->ltHandle))==CUBLAS_STATUS_SUCCESS) {
 		printf("Successfully create cublasLt handle.\n");
@@ -1072,9 +1139,13 @@ cuVPRMatAccEnv::cuVPRMatAccEnv(const cudaDataType cuDtype, const DtypeCount_t by
 	case CUDA_R_8F_E4M3:
 	case CUDA_R_8F_E5M2:
 	case CUDA_R_32F:
+	    this->local_feature_query_result_datatype = CUDA_R_32F;
+	    this->local_feature_query_result_datatype_bytecount = 4;
 		__CheckStatus(cublasLtMatmulDescCreate(&LocalFeatureQueryDesc, CUBLAS_COMPUTE_32F, CUDA_R_32F),"Create loc feature query mat desc");
 		break;
 	case CUDA_R_8I:
+	    this->local_feature_query_result_datatype = CUDA_R_32I;
+	    this->local_feature_query_result_datatype_bytecount = 4;
 		__CheckStatus(cublasLtMatmulDescCreate(&LocalFeatureQueryDesc, CUBLAS_COMPUTE_32I, cuDtype),"Create loc feature query mat desc");
 		break;
 	}
@@ -1083,6 +1154,21 @@ cuVPRMatAccEnv::cuVPRMatAccEnv(const cudaDataType cuDtype, const DtypeCount_t by
 	__CheckStatus(cublasLtMatmulPreferenceCreate(&LocalFeatureQueryMatmul_preference),"Create LocalFeatureQueryMatmul_preference");
 	int32 A_align = 64;
 	__CheckStatus(cublasLtMatmulPreferenceSetAttribute(LocalFeatureQueryMatmul_preference, CUBLASLT_MATMUL_PREF_MIN_ALIGNMENT_A_BYTES, &A_align, sizeof(A_align)),"Create LocalFeatureQueryMatmul_preference");
+
+
+
+
+	for (uint32 i=0; i<retrieve_thread_num; i++) {
+		CuVPRAccMat* pResult_mat = new CuVPRAccMat;
+		pResult_mat->SetMatrixDtypeCount(local_feature_query_result_datatype, local_feature_query_result_datatype_bytecount);
+		pResult_mat->allocGpuMatDesc();
+		pResult_mat->SetGpuMatDescLayoutOrder(COL_MAJOR);
+		local_feature_query_result_mat_list_retrieve_for_each_thread.push_back(pResult_mat);
+	}
+
+    this->retrieve_thread_num = retrieve_thread_num;
+    this->last_topN = 0;
+    this->retrieve_thread_jobs.clear();
 
 }
 
@@ -1156,6 +1242,27 @@ int32 cuVPRMatAccEnv::SetDBInfo(const int32* db_frame_keypoint_num, const int32*
     	this->db_each_frame_keypoint_num_mat.Set<int32>(0, i, *(db_frame_keypoint_num+i));
     	this->db_frame_base_mat_start_col_mat.Set<int32>(0,i, *(db_frame_base_mat_start_col+i));
     }
+
+
+
+    // Initialize DB_each_frame_local_feature_mat_list
+    cudaDataType DB_local_feature_dtype = this->DB_local_feature_mat.GetMatrixDtype();
+
+    uint32 local_feature_dim = this->DB_local_feature_mat.GetMatHeight();
+    this->DB_each_frame_local_feature_mat_list.clear();
+    void* db_mat_ptr = this->DB_local_feature_mat.GetMatPtr();
+    for (uint32 i=0; i<this->db_frame_num; i++) {
+    	CuVPRAccMat* pdb_frame_mat = new CuVPRAccMat;
+    	pdb_frame_mat->SetMatrixDtypeCount(DB_local_feature_dtype, this->DB_local_feature_mat.GetMatrixDtypeCount());
+    	pdb_frame_mat->SetMatGpuMem(db_mat_ptr+(*(db_frame_base_mat_start_col+i))*this->DB_local_feature_mat.GetMatrixDtypeCount()*local_feature_dim,
+    			                    local_feature_dim, *(db_frame_keypoint_num+i));
+    	pdb_frame_mat->allocGpuMatDesc();
+    	pdb_frame_mat->SetGpuMatDescLayoutOrder(COL_MAJOR);
+    	pdb_frame_mat->SetGpuMatDesc(local_feature_dim, *(db_frame_keypoint_num+i));
+    	this->DB_each_frame_local_feature_mat_list.push_back(pdb_frame_mat);
+    	//pdb_frame_mat->dbg_PrintMember();
+    }
+
     return CU_VPR_ACC_SUCCESS;
 }
 
@@ -1172,21 +1279,21 @@ int32 cuVPRMatAccEnv::AttachHolFeatureToDB(const MatDim_t hol_f_num,  const MatD
 int32 cuVPRMatAccEnv::HolQuery(const MatDim_t hol_f_num,  const MatDim_t hol_f_dim,  const void* data, fp32* result)
 {
 	/*** fill the query_hol_mat with the query frame holistic feature ***/
-	if (this->query_hol_mat.DynamicFillMatGpuData(hol_f_num, hol_f_dim, data)==CU_VPR_ACC_FAILED) {
+	if (this->query_hol_mat.AdaptiveFillMatGpuData(hol_f_num, hol_f_dim, data)==CU_VPR_ACC_FAILED) {
 		printf("failed to fill hol query matrix!\n");
 		return CU_VPR_ACC_FAILED;
 	}
 	/** Reshape the hol_query_result_mat**/
-	if (this->hol_query_result_mat.DynamicReshapeMatGpu(hol_f_num, this->DB_hol_mat.GetMatHeight())==CU_VPR_ACC_FAILED) {
+	if (this->hol_query_result_mat.AdaptiveReshapeMatGpu(hol_f_num, this->DB_hol_mat.GetMatHeight())==CU_VPR_ACC_FAILED) {
 		printf("failed to reshape hol_query_result_mat!\n");
 		return CU_VPR_ACC_FAILED;
 	}
 
 	/****** perform holistic feature query *******/
 	// get the matmul heuristic
-	query_hol_mat.dbg_PrintMember();
-	DB_hol_mat.dbg_PrintMember();
-	hol_query_result_mat.dbg_PrintMember();
+	//query_hol_mat.dbg_PrintMember();
+	//DB_hol_mat.dbg_PrintMember();
+	//hol_query_result_mat.dbg_PrintMember();
 
 
 	cublasLtMatmulHeuristicResult_t HolFeatureQueryMatmul_heuristicResult = {};
@@ -1247,12 +1354,12 @@ int32 cuVPRMatAccEnv::Query(const MatDim_t loc_feature_dim, const MatDim_t loc_f
 	MatDim_t loc_feature_num_rectified = loc_feature_num;
 	if (reminder!=0)
 	  loc_feature_num_rectified += (4-reminder);
-	if (this->query_local_feature_mat.DynamicFillMatGpuData(loc_feature_dim, loc_feature_num_rectified, data)==CU_VPR_ACC_FAILED) {
+	if (this->query_local_feature_mat.AdaptiveFillMatGpuData(loc_feature_dim, loc_feature_num_rectified, data)==CU_VPR_ACC_FAILED) {
 		printf("failed to fill local feature query matrix!\n");
 		return CU_VPR_ACC_FAILED;
 	}
 	/** Reshape the local_feature_query_result_mat**/
-	if (this->local_feature_query_result_mat.DynamicReshapeMatGpu(loc_feature_num_rectified, this->DB_local_feature_mat.GetMatWidth())==CU_VPR_ACC_FAILED) {
+	if (this->local_feature_query_result_mat.AdaptiveReshapeMatGpu(loc_feature_num_rectified, this->DB_local_feature_mat.GetMatWidth())==CU_VPR_ACC_FAILED) {
 		printf("failed to reshape hol_query_result_mat!\n");
 		return CU_VPR_ACC_FAILED;
 	}
@@ -1314,15 +1421,171 @@ int32 cuVPRMatAccEnv::Query(const MatDim_t loc_feature_dim, const MatDim_t loc_f
     local_feature_query_result_mat.GetMatGpuDataParitalRow((void*)result, loc_feature_num);
 	return CU_VPR_ACC_SUCCESS;
 }
-int32 cuVPRMatAccEnv::QueryN(const MatDim_t q_mat_h, const MatDim_t q_mat_w,
-                            const void* q_mat,
+
+void cuVPRMatAccEnv::QueryNSeg(const int32 threadId,
+		                       const int32 N, const int32* data_base_N_idx, const int32* topN_frame_kp_num, const int32* topN_frame_kp_col_start,
+							   const int32 topN_idx_from, const int32 topN_idx_to,
+		                       const MatDim_t loc_feature_num_rectified, const MatDim_t actual_query_loc_feature_num,
+		                       fp32* result)
+{
+  CuVPRAccMat* thread_retrieve_result_mat = local_feature_query_result_mat_list_retrieve_for_each_thread[threadId];
+  uint32 frame_num = topN_idx_to-topN_idx_from;
+  uint32 kp_desc_dim = this->query_local_feature_mat.GetMatHeight();
+
+  uint32 result_mat_col_size_in_byte = actual_query_loc_feature_num*this->local_feature_query_result_datatype_bytecount;
+  uint32 result_offset_in_byte=*(topN_frame_kp_col_start+topN_idx_from)*result_mat_col_size_in_byte;
+
+  uint8* result_ptr_for_this_thread = ((uint8*)result)+result_offset_in_byte;
+  // retrieve all the frame assigned to this thread
+  for (uint32 i=0; i<frame_num; i++) {
+	uint32 amoung_topN_frame_idx = topN_idx_from+i;
+	uint32 frame_kp_num = *(topN_frame_kp_num+amoung_topN_frame_idx);
+	CuVPRAccMat* pDB_frame_mat =  DB_each_frame_local_feature_mat_list[*(data_base_N_idx+amoung_topN_frame_idx)];
+
+	/** Reshape the retrieve thread query result mat**/
+    if (thread_retrieve_result_mat->AdaptiveReshapeMatGpu(loc_feature_num_rectified, frame_kp_num)==CU_VPR_ACC_FAILED) {
+	    printf("failed to reshape hol_query_result_mat!\n");
+        return;
+	}
+
+    //printf ("#############Processing TopN frame: %d#############\n", i);
+    //printf("query mat\n");
+    //query_local_feature_mat.dbg_PrintMember();
+    //printf("\nDB frame mat %d\n",*(data_base_N_idx+amoung_topN_frame_idx));
+    //pDB_frame_mat->dbg_PrintMember();
+    //printf("\n result mat\n\n");
+    //thread_retrieve_result_mat->dbg_PrintMember();
+
+	cublasLtMatmulHeuristicResult_t LocalFeatureQueryMatmul_heuristicResult = {};
+    int32 returnedResults = 0;
+	cublasStatus_t state;
+	state = cublasLtMatmulAlgoGetHeuristic(this->ltHandle, this->LocalFeatureQueryDesc,
+									   this->query_local_feature_mat.GetCuMatDesc(),
+									   pDB_frame_mat->GetCuMatDesc(),
+									   thread_retrieve_result_mat->GetCuMatDesc(),
+									   thread_retrieve_result_mat->GetCuMatDesc(),
+									   this->LocalFeatureQueryMatmul_preference, 1, &LocalFeatureQueryMatmul_heuristicResult,
+									   &returnedResults);
+	//printf("%d\n", state);
+	if (returnedResults==0) {
+		printf("Unable to get Matmul algo heuristic!\n");
+		return;
+	}
+	// perform matmul
+	fp32 alpha = 1.0;
+	fp32 beta  = 0.0;
+	state = cublasLtMatmul(this->ltHandle, this->LocalFeatureQueryDesc,
+			               &alpha,
+						   this->query_local_feature_mat.GetMatPtr(),    this->query_local_feature_mat.GetCuMatDesc(),       // mat A
+						   pDB_frame_mat->GetMatPtr(), pDB_frame_mat->GetCuMatDesc(),    // mat B
+
+						   &beta,
+						   nullptr, thread_retrieve_result_mat->GetCuMatDesc(),  // mat C
+						   thread_retrieve_result_mat->GetMatPtr(), thread_retrieve_result_mat->GetCuMatDesc(),  // mat D
+
+						   &LocalFeatureQueryMatmul_heuristicResult.algo,
+
+						   nullptr, 0,
+						   0);
+    if (state != CUBLAS_STATUS_SUCCESS) {
+      printf ("gemm failed\n");
+      switch(state) {
+      case CUBLAS_STATUS_NOT_INITIALIZED:
+    	  printf ("the library was not initialized: CUBLAS_STATUS_NOT_INITIALIZED\n");
+    	  break;
+      case CUBLAS_STATUS_INVALID_VALUE:
+    	  printf ("CUBLAS_STATUS_INVALID_VALUE\n");
+    	  break;
+      case CUBLAS_STATUS_ARCH_MISMATCH:
+          printf ("the device does not support math in half precision.\n");
+      case CUBLAS_STATUS_EXECUTION_FAILED:
+          printf ("the function failed to launch on the GPU.\n");
+      }
+      return;
+    }
+
+    /*** Get the result back to cpu memory***/
+    thread_retrieve_result_mat->GetMatGpuDataParitalRow((void*)result_ptr_for_this_thread, actual_query_loc_feature_num);
+    //printf("Get the result ------!\n");
+    result_offset_in_byte=*(topN_frame_kp_num+amoung_topN_frame_idx)*result_mat_col_size_in_byte;
+    result_ptr_for_this_thread +=result_offset_in_byte;
+    //printf("Get the result  xxxxxx-!\n");
+  }
+}
+
+int32 cuVPRMatAccEnv::QueryN(const MatDim_t loc_feature_dim, const MatDim_t loc_feature_num,
+                            const void* data,
 	                        const int32 N, const int32* data_base_N_idx, const int32 total_db_kp,
 	                        fp32* result)
 {
-    // Check if the query data can fit in query_local_feature_mat
+	int32 topN_frame_local_feature_num[N];        // kp num of each topN DB frame
+	int32 topN_frame_kp_col_start[N];  // accumulated kp num of each topN DB frame
 
+    uint32 topN_idx;
+    for (uint32 i=0; i<N; i++) {
+    	topN_idx = *(data_base_N_idx+i);
+        topN_frame_local_feature_num[i] = db_each_frame_keypoint_num_mat.Get<uint32>(0,topN_idx);
+        topN_frame_kp_col_start[i] = 0;
+    }
+    uint32 last_topN_frame_accum_kp_num = 0;
+    for (uint32 i=0; i<N; i++) {
+    	topN_frame_kp_col_start[i]=last_topN_frame_accum_kp_num;
+    	last_topN_frame_accum_kp_num += topN_frame_local_feature_num[i];
+        //printf ("%d----%d \n",topN_frame_local_feature_num[i], topN_frame_kp_col_start[i]);
+    }
+
+	/*** fill the query_local_feature_mat with the query frame local feature ***/
+	// only works when loc_feature_num_rectified%4 == 0
+	uint8 reminder = loc_feature_num%4;
+	MatDim_t loc_feature_num_rectified = loc_feature_num;
+	if (reminder!=0)
+	  loc_feature_num_rectified += (4-reminder);
+	if (this->query_local_feature_mat.AdaptiveFillMatGpuData(loc_feature_dim, loc_feature_num_rectified, data)==CU_VPR_ACC_FAILED) {
+		printf("failed to fill local feature query matrix!\n");
+		return CU_VPR_ACC_FAILED;
+	}
+    /********************Start topN query multi-thread**********************/
+	this->__AssignTopNJobs(N); // split jobs for each thread.
+
+	std::vector<std::thread> threads;
+	int32 thread_num = this->retrieve_thread_num;
+	int32 jobs_accum = 0;
+	// create each retrieve thread
+    for(uint32 i=0; i<thread_num;i++) {
+      int32 thread_job_num = retrieve_thread_jobs[i];
+
+      threads.push_back(std::thread(&cuVPRMatAccEnv::QueryNSeg, this, i,
+      		                       N, &data_base_N_idx[0], &topN_frame_local_feature_num[0], &topN_frame_kp_col_start[0],
+								   jobs_accum, jobs_accum+thread_job_num,
+								   loc_feature_num_rectified, loc_feature_num,
+      		                       result));
+      jobs_accum += thread_job_num;
+    }
+
+    // wait for each thread to finish
+    for(uint32 i=0; i<thread_num;i++) {
+      threads[i].join();
+    }
+    return CU_VPR_ACC_SUCCESS;
 }
-
+void cuVPRMatAccEnv::__AssignTopNJobs(const uint32 topN)
+{
+	// check if topN chenges
+	if (topN==this->last_topN)
+		return;
+    // re-assign number of jobs for each thread
+	this->retrieve_thread_jobs.clear();
+    uint32 thread_num = this->retrieve_thread_num;
+    uint32 avg_jobs = topN/thread_num;
+    uint32 remine_jobs = topN%thread_num;
+    for (uint32 i=0; i<thread_num; i++) {
+    	this->retrieve_thread_jobs.push_back(avg_jobs);
+    	if (i<remine_jobs) {
+    		this->retrieve_thread_jobs[i]+=1;
+    	}
+    }
+    this->last_topN = topN;
+}
 uint8 __CheckStatus(cublasStatus_t state, const char* str)
 {
 	if (state==CUBLAS_STATUS_SUCCESS) {
@@ -1337,7 +1600,7 @@ uint8 __CheckStatus(cublasStatus_t state, const char* str)
 
 static cuVPRMatAccEnv *hVprAccEnv;
 /*APIs that use the CublasLt to acc the VPR */
-void InitMatAccExEnv(const uint32 feature_datatype)
+void InitMatAccExEnv(const uint32 feature_datatype, const uint32 topN_retrieve_thread_num)
 {
 	cudaDataType cuDtype;
 	DtypeCount_t bytecount;
@@ -1362,7 +1625,7 @@ void InitMatAccExEnv(const uint32 feature_datatype)
 		printf("Undefined data type!\n");
 		break;
 	}
-	hVprAccEnv = new cuVPRMatAccEnv(cuDtype, bytecount);
+	hVprAccEnv = new cuVPRMatAccEnv(cuDtype, bytecount, topN_retrieve_thread_num);
 	printf ("MatAccExEnv successfully initialized!\n");
 	int attr_value;
 	cudaDeviceGetAttribute ( &attr_value, cudaDevAttrComputeMode, 0 );
@@ -1398,7 +1661,16 @@ int32 BatchQueryDataBase(const int32 mat_h,  const int32 mat_w,  const uint8* da
 {
     return hVprAccEnv->Query(mat_w, mat_h, (void*)data, result);
 }
-
+int32 QueryDataBaseN(const int32 mat_h, const int32 mat_w,
+		                    const uint8* data,
+		                    const int32 N, const int32* data_base_N_idx, const int32 total_db_kp,
+		                    fp32* result)
+{
+	return hVprAccEnv->QueryN(mat_w, mat_h,
+			                 (void*)data,
+                             N, data_base_N_idx, total_db_kp,
+                             result);
+}
 
 int32 CVT_MatFP32ToFP8E4M3(const fp32 *matFP32, const uint32 size, const fp32 scale, uint8 *matFP8e4m3)
 {
@@ -1420,7 +1692,10 @@ int32 CVT_MatFP8E4M3ToFP32(const uint8 *matFP8e4m3, const uint32 size, const fp3
     int32 E    = (((uint32)data)>>3)&0x0F;
 
     int32 M    = (((uint32)data)>>0)&0x07;
-    E = (E+127-7)<<23;
+    if (E==0)
+      E = 0;
+    else
+      E = (E+127-7)<<23;
     M = M<<20;
     *((uint32*)(matFP32+i)) = sign|E|M ;
   }

@@ -1,20 +1,20 @@
-
-/* 
+/*
  * This file is part of the Hir-ATLAS distribution (https://github.com/Yuan-Fangming/Hir-ATLAS).
  * Copyright (c) 2024 Fangming Yuan.
- * 
- * This program is free software: you can redistribute it and/or modify  
- * it under the terms of the GNU General Public License as published by  
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 2.
  *
- * This program is distributed in the hope that it will be useful, but 
- * WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License 
+ * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
+
 
 /*
  * libvipracc.hpp
@@ -35,7 +35,10 @@ extern "C" {
 #define ONLY_PAIRWISE_MATCH 3
 #define PAIRWISE_RANSAC  4
 #define HOLISTIC_FEATURE_MATCH 5
-
+#define LPG_MATCH   6
+#define RSS         7  // Rapid Spatial Scoring for Patch-NetVLAD
+// test algorithms
+#define PAIRWISE_STARGRAPH  1000
 
 
 

@@ -12,7 +12,8 @@
 #
 # You should have received a copy of the GNU General Public License 
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
- 
+
+
 import numpy as np
 from VIPRDLpy3 import *
 import time
@@ -1256,7 +1257,7 @@ class CAccMatrixEx:
       print ("Please assign an static shared library for the CAccMatrix")
       return
     
-    acc_lib = ct.CDLL(acc_file)#'.lib/FeatureMatchAcc.so'
+    acc_lib = ct.CDLL(acc_file)
       
     self.MatAcc_Init_cuVIPRMatAcc = acc_lib.Init_cuVIPRMatAcc  
     self.MatAcc_Init_cuVIPRMatAcc.restype = ct.c_int32
@@ -1329,7 +1330,7 @@ class CAccMatrixEx:
 
     # MatAccEx APIs 
     self.MatAcc_InitMatAccExEnv = acc_lib.InitMatAccExEnv
-    self.MatAcc_InitMatAccExEnv.argtypes = [ct.c_int32]   
+    self.MatAcc_InitMatAccExEnv.argtypes = [ct.c_int32, ct.c_int32]   
     
     self.MatAcc_malloDataBaseMat = acc_lib.malloDataBaseMat
     self.MatAcc_malloDataBaseMat.restype = ct.c_int32
@@ -1369,7 +1370,14 @@ class CAccMatrixEx:
                        ct.c_char_p,\
                        ndpointer(ct.c_float, ndim=1, flags="C_CONTIGUOUS")]  
                
-                      
+    self.MatAcc_QueryDataBaseN = acc_lib.QueryDataBaseN
+    self.MatAcc_QueryDataBaseN.restype = ct.c_int32
+    self.MatAcc_QueryDataBaseN.argtypes = [\
+                       ct.c_int32 , ct.c_int32,\
+                       ct.c_char_p, \
+                       ct.c_int32, ndpointer(ct.c_int32, ndim=1, flags="C_CONTIGUOUS"),ct.c_int32,\
+                       ndpointer(ct.c_float, ndim=1, flags="C_CONTIGUOUS")]
+                          
     ### FP32 to FP8 conversion ###
     self.MatAcc_CVT_MatFP32ToFP8E4M3 = acc_lib.CVT_MatFP32ToFP8E4M3
     self.MatAcc_CVT_MatFP32ToFP8E4M3.restype = ct.c_int
@@ -1469,15 +1477,17 @@ class CAccMatrixEx:
     if state!=0:
       print ("Failed to set the DB info!!")
       
-  def AttachGPU_DB_feature(self, mat, attached_frame_num, attached_frame_kp_num):
+  def AttachGPU_DB_feature(self, mat, attached_frame_num, attached_frame_kp_num, feature_storage_type):
     mat_h = mat.shape[0]
     mat_w = mat.shape[1]
-    mat = self.__2Dto1D(mat, dtype=mat.dtype)
+    mat = self.__2Dto1D(mat, dtype=feature_storage_type)   # !!! becareful here mat has to be the datatypes same as the feature storage type, otherwise the mat.tobytes() will get incorrect byte sequence
     attached_frame_kp_num = np.ascontiguousarray(attached_frame_kp_num, dtype=np.int32)  
     data_in_byte = mat.tobytes()  
     state = self.MatAcc_BatchAttachDataBaseMatrix(mat_h, mat_w, data_in_byte, attached_frame_num, attached_frame_kp_num)
     if state==0:
       print ("Attach DB local feature success with feature shape = (%d, %d)!"%(mat_h, mat_w))
+    else:
+      print ("failed to attach DB local feature to the GPU memory!")
 
   def HolQuery(self, q_hol_mat):
     mat_w = q_hol_mat.shape[1]
@@ -1507,6 +1517,7 @@ class CAccMatrixEx:
     ####end_time = time.time()
     ###print (end_time-start_time)
     result = np.zeros((mat_h*self.base_mat_h),dtype=np.float32) 
+    #print (q_mat)
     q_mat_in_byte = q_mat.tobytes()
     #start_time = time.time()
     state = self.MatAcc_BatchQueryDataBase(mat_h, mat_w, q_mat_in_byte, result)
@@ -1515,16 +1526,18 @@ class CAccMatrixEx:
     #if state==0:
       #result = self.__1Dto2D(result_F, self.base_mat_w, mat_w )
       #result = self.__Transfer2RowMajor(result)
+    #if state==0:
     return result
   
   def QueryK(self, q_mat, topKIdx, total_topk_kp):
-    mat_h = q_mat.shape[1]
-    mat_w = q_mat.shape[0]
-    q_mat = self.__2Dto1D(q_mat, dtype=np.float32)
-    result = np.zeros((total_topk_kp*mat_w),dtype=np.float32) 
+    mat_h = q_mat.shape[0]
+    mat_w = q_mat.shape[1]
+    q_mat = self.__2Dto1D(q_mat, dtype=q_mat.dtype)
+    result = np.zeros((total_topk_kp*mat_h),dtype=np.float32) 
     result = np.ascontiguousarray(result, dtype=np.float32) 
     topKIdx = np.ascontiguousarray(topKIdx, dtype=np.int32) 
-    state = self.MatAcc_QueryDataBaseN_FP32(mat_h, mat_w, q_mat, topKIdx.shape[0], topKIdx, total_topk_kp, result)
+    q_mat_in_byte = q_mat.tobytes()
+    state = self.MatAcc_QueryDataBaseN(mat_h, mat_w, q_mat_in_byte, topKIdx.shape[0], topKIdx, total_topk_kp, result)
     return result   
   def NormalizeFeatures(self, feature_mat):
     mat_h = feature_mat.shape[1]
@@ -1541,23 +1554,38 @@ class CAccMatrixEx:
   # img_local_feature: np array in shape [N, dim], where N indicates the Number of lcoal feature in the image, 
   #                    and the dim represents the local feature dimmension
   # datatype:     Indicates the conversion target datatype can be  ["FP8", "INT8", "INT16", "FP16"]
-  # data_subtype: String indicates the fp8 type. It can be either "E4M3" or "E5M2"
-  # return: The image local feature in fp8 datatype. The np.uint8 datatye are used to store the FP8 data.
-  def CVT_ImageLocalFeatureDataType(self, img_local_feature, datatype="FP8", data_subtype="E4M3"):
+  # int8_max/int8_min: used only for INT8 conversion. It is float point number, indicating value interval of img_local_feature values.
+  # data_subtype: 
+  #         For FP8:
+  #           String indicates the fp8 type. It can be either "E4M3" or "E5M2"
+  #         For INT8:
+  #           SYMMETRY: The value are distirbuted SYMMETRY around 0. INT8 is used to represents the digits.
+  #           ALL_POSITIVE: The value are all positive values. UINT8 is used to represent the digits.
+  # return: For FP8:
+  #           The image local feature in fp8 datatype. The np.uint8 datatye are used to store the FP8 data.
+  #         For INT8:
+  #           ....
+  #         For INT16:
+  #           .... Support in the future
+  #         For FP16:
+  #           .... Support in the future
+  def CVT_ImageLocalFeatureDataType(self, img_local_feature, datatype="FP8", data_subtype="E4M3", int8_max=0.0, int8_min=0.0):
     # normalize each local feature
-    print(img_local_feature.shape)
-    print(img_local_feature)
-    feature = self.NormalizeFeatures(img_local_feature) 
-    print(feature)
+    #print(img_local_feature.shape)
+    #print (img_local_feature)
+    #print ("***********Normalize Feature***********")
+    #print (feature)
     # flatten the 2D image local feature array to 1D vector
-    N   = feature.shape[0]
-    dim = feature.shape[1] 
+    N   = img_local_feature.shape[0]
+    dim = img_local_feature.shape[1] 
     feature_total_dim = N*dim
-    feature = np.reshape(feature, (feature_total_dim)) 
-    # continous storage mode
-    feature = np.ascontiguousarray(feature, dtype=np.float32)
+
     
     if datatype == "FP8":
+      feature = self.NormalizeFeatures(img_local_feature) 
+      feature = np.reshape(feature, (feature_total_dim)) 
+      # continous storage mode
+      feature = np.ascontiguousarray(feature, dtype=np.float32)
       # memory to store the converted fp8 data
       cvt_feature = np.zeros((feature_total_dim),dtype=np.uint8)
       # do the convertion
@@ -1567,8 +1595,23 @@ class CAccMatrixEx:
         self.MatAcc_CVT_MatFP32ToFP8E5M2(feature, feature_total_dim, 1.0, cvt_feature) 
       # reshape back to (N, dim) 2D dimension    
       cvt_feature = np.reshape(cvt_feature, (N,dim))
+      #cvt_feature = np.reshape(feature, (N,dim))
+      #print ("**********Converted Feature***********")
+      #print (cvt_feature.dtype)
+      #print(cvt_feature)
       return cvt_feature
     elif datatype == "INT8":
+      if data_subtype=="SYMMETRY":
+        bias = (int8_min+int8_max)/2.0
+        amplitude = int8_max - bias
+        # limit the value in img_local_feature in range [int8_min, int8_max]
+        cvt_feature = np.clip(img_local_feature, int8_min, int8_max)
+        cvt_feature = cvt_feature-bias
+        cvt_feature = cvt_feature*(127.0/amplitude)
+        cvt_feature = cvt_feature.astype(np.int8)
+        return cvt_feature
+      elif data_subtype=="ALL_POSITIVE":
+        dummy = 0
       return 0
     elif datatype == "INT16":
       return 0
