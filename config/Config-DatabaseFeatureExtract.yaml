@@ -1,1 +1,29 @@
+# The directory to store the database raw images.
+database_img_dir: "/home/fangming/Home_office/benchmark/dataset/images/GardensPointWalking/day_left"
 
+# The directory to store the database features and associated files.
+database_feature_dir: "/home/fangming/svn_test/SVN_repository/PHD/RTX3090/VIPR"
+
+# VGG16 backbone weights file
+vgg16_weights_file: "/home/fangming/svn_test/SVN_repository/PHD/RTX3090/lib/vgg16.npy"
+# check point file for ProposalNet and AttNet
+ckpt_file: "/home/fangming/svn_test/SVN_repository/PHD/RTX3090/lib/ckpt/Journal_SoftmaxPool1Channel1x1_Attention_432x432_1e5_JointLoss_with_img_rescale0120.ckpt"
+# The prefix of the local feature PCA compression files 
+pca_file_prefix: "/home/fangming/svn_test/SVN_repository/PHD/RTX3090/VIPR/WebCam1KPCALocalSPED-SoftMP-Journal-1x1FM-Split-Attention-PCA1024"
+# Hyper-Dimensional Vector file for the HDC holistic aggregation
+HDC_file: " "
+# cuda acceleration library
+cuda_acc_file: "/home/fangming/svn_test/SVN_repository/PHD/RTX3090/lib/cudaPrj/cuVIPRACCLib/Debug/libcuVIPRACCLib"
+
+# Database name
+database_name: "GPW-day-left"
+# Database is split into batch_size
+batch_size: 2
+
+# local descriptor datatype
+kp_desc_dtype: INT8    #Can be one of ['FP32', 'FP8_E4M3', 'INT8']
+# Extract files for LPG
+enable_lpg_extraction: True
+# LPG closest neighbor window size
+lpg_window_x: 60
+lpg_window_y: 60
